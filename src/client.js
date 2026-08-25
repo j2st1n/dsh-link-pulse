@@ -62,11 +62,42 @@ window.__ModuleLoader__.load({
       whiteSpace: 'nowrap',
     }
 
-    let overlayOpen = false
-    const listeners = new Set()
-    function setOverlay(val) {
-      overlayOpen = val
-      listeners.forEach((fn) => fn(val))
+    // ---------- 全局单例共享状态（确保内外完全同源同步） ----------
+    const store = {
+      state: {
+        data: null,
+        loading: false,
+        open: false,
+      },
+      listeners: new Set(),
+      set(patch) {
+        store.state = { ...store.state, ...patch }
+        for (const fn of store.listeners) fn()
+      },
+      subscribe(fn) {
+        store.listeners.add(fn)
+        return () => store.listeners.delete(fn)
+      },
+    }
+
+    function useStore() {
+      return React.useSyncExternalStore(store.subscribe, () => store.state)
+    }
+
+    async function fetchStatus(force = false) {
+      if (store.state.loading && !force) return
+      try {
+        store.set({ loading: true })
+        const res = await fetch(`/api/link-pulse/status${force ? '?refresh=1' : ''}`)
+        if (res.ok) {
+          const json = await res.json()
+          store.set({ data: json, loading: false })
+        } else {
+          store.set({ loading: false })
+        }
+      } catch {
+        store.set({ loading: false })
+      }
     }
 
     function getQualityColor(quality, latencyMs) {
@@ -108,7 +139,7 @@ window.__ModuleLoader__.load({
             )
             if (modelButton && modelButton.textContent) {
               let text = modelButton.textContent.trim()
-              // 剥离开关/标签 UI 残留，如「default」「推理等级」「high」等
+              // 剥离「default」「推理等级」「模型」等 UI 标签
               text = text
                 .split(/[\n|·•]/)[0]
                 .replace(/\s*(default|推理等级|模型|model)\s*/gi, '')
@@ -132,36 +163,17 @@ window.__ModuleLoader__.load({
 
     function FooterEntry(props) {
       const { wide } = props
-      const [isOpen, setIsOpen] = useState(overlayOpen)
+      const state = useStore()
       const [hovering, setHovering] = useState(false)
-      const [data, setData] = useState(null)
-      const [loading, setLoading] = useState(false)
       const hoverTimerRef = React.useRef(null)
 
       useEffect(() => {
-        listeners.add(setIsOpen)
-        return () => listeners.delete(setIsOpen)
-      }, [])
-
-      const fetchData = useCallback(async () => {
-        try {
-          setLoading(true)
-          const res = await fetch('/api/link-pulse/status')
-          if (res.ok) {
-            const json = await res.json()
-            setData(json)
-          }
-        } catch {} finally {
-          setLoading(false)
-        }
-      }, [])
-
-      useEffect(() => {
-        fetchData()
-        const timer = setInterval(fetchData, 45_000)
+        fetchStatus(false)
+        const timer = setInterval(() => fetchStatus(false), 45_000)
         return () => clearInterval(timer)
-      }, [fetchData])
+      }, [])
 
+      const data = state.data
       const defaultModel = data?.defaultModelConfig?.model || 'gemini-3.7-flash-high'
       const activeModel = useActiveModel(defaultModel)
 
@@ -187,19 +199,21 @@ window.__ModuleLoader__.load({
         setHovering(false)
       }, [])
 
+      const otherProviders = (data?.providers || []).filter((p) => p.id !== activeProviderInfo?.id)
+
       const node = h(
         'button',
         {
           className: 'pulse-btn',
-          onClick: () => setOverlay(!isOpen),
+          onClick: () => store.set({ open: !state.open }),
           onMouseEnter: onMouseEnter,
           onMouseLeave: onMouseLeave,
           style: {
             ...btnBase,
             width: '100%',
             justifyContent: wide ? 'flex-start' : 'center',
-            borderColor: isOpen ? T.brand : T.border,
-            background: isOpen ? 'var(--dsw-alias-interactive-bg-hover, rgba(59,130,246,.12))' : 'transparent',
+            borderColor: state.open ? T.brand : T.border,
+            background: state.open ? 'var(--dsw-alias-interactive-bg-hover, rgba(59,130,246,.12))' : 'transparent',
           },
         },
         h('span', {
@@ -250,9 +264,8 @@ window.__ModuleLoader__.load({
           ),
       )
 
-      if (!hovering || isOpen) return node
+      if (!hovering || state.open) return node
 
-      const otherProviders = (data?.providers || []).filter((p) => p.id !== activeProviderInfo?.id)
       return h(
         'div',
         {
@@ -279,7 +292,7 @@ window.__ModuleLoader__.load({
               lineHeight: '17px',
               color: T.label,
               whiteSpace: 'pre',
-              z: 100,
+              zIndex: 100,
               fontFamily: 'system-ui, -apple-system, sans-serif',
             },
           },
@@ -349,31 +362,10 @@ window.__ModuleLoader__.load({
     }
 
     function OverlayPanel() {
-      const [isOpen, setIsOpen] = useState(overlayOpen)
-      const [data, setData] = useState(null)
-      const [loading, setLoading] = useState(false)
-
-      useEffect(() => {
-        listeners.add(setIsOpen)
-        return () => listeners.delete(setIsOpen)
-      }, [])
-
-      const fetchData = useCallback(async () => {
-        try {
-          setLoading(true)
-          const res = await fetch('/api/link-pulse/status')
-          if (res.ok) {
-            const json = await res.json()
-            setData(json)
-          }
-        } catch {} finally {
-          setLoading(false)
-        }
-      }, [])
-
-      useEffect(() => {
-        if (isOpen) fetchData()
-      }, [isOpen, fetchData])
+      const state = useStore()
+      const isOpen = state.open
+      const data = state.data
+      const loading = state.loading
 
       const defaultModel = data?.defaultModelConfig?.model || 'gemini-3.7-flash-high'
       const activeModel = useActiveModel(defaultModel)
@@ -391,6 +383,7 @@ window.__ModuleLoader__.load({
       const currentLatency = activeProviderInfo?.probe?.latencyMs ?? -1
       const currentQuality = activeProviderInfo?.probe?.quality || 'offline'
       const statusColor = getQualityColor(currentQuality, currentLatency)
+      const otherProviders = providers.filter((p) => p.id !== activeProviderInfo?.id)
 
       return h(
         'div',
@@ -406,7 +399,7 @@ window.__ModuleLoader__.load({
             backdropFilter: 'blur(4px)',
           },
           onClick: (e) => {
-            if (e.target === e.currentTarget) setOverlay(false)
+            if (e.target === e.currentTarget) store.set({ open: false })
           },
         },
         h(
@@ -458,7 +451,7 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   className: 'pulse-btn',
-                  onClick: fetchData,
+                  onClick: () => fetchStatus(true),
                   disabled: loading,
                   style: {
                     display: 'flex',
@@ -480,7 +473,7 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   className: 'pulse-btn',
-                  onClick: () => setOverlay(false),
+                  onClick: () => store.set({ open: false }),
                   style: {
                     padding: '4px 8px',
                     borderRadius: '6px',
@@ -586,7 +579,6 @@ window.__ModuleLoader__.load({
                 '🌐 其它可用 Provider 链路测速',
               ),
               (() => {
-                const otherProviders = providers.filter((p) => p.id !== activeProviderInfo?.id)
                 if (otherProviders.length === 0) {
                   return h(
                     'div',

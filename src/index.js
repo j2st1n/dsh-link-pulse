@@ -137,6 +137,9 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data))
 }
 
+let cachedData = null
+let lastProbeAt = 0
+
 export function apply(ctx) {
   ctx.effect(() =>
     ctx.webServer.register({
@@ -148,6 +151,12 @@ export function apply(ctx) {
         }
 
         try {
+          const isForce = req.url && req.url.includes('refresh=1')
+          const now = Date.now()
+          if (!isForce && cachedData && now - lastProbeAt < 25_000) {
+            return sendJson(res, 200, cachedData)
+          }
+
           const { providers, defaultModelConfig, modelToProviderMap } = loadDynamicProviders()
 
           const probePromises = providers.map(async (p) => {
@@ -160,12 +169,15 @@ export function apply(ctx) {
 
           const probedProviders = await Promise.all(probePromises)
 
-          sendJson(res, 200, {
+          cachedData = {
             defaultModelConfig,
             modelToProviderMap,
             providers: probedProviders,
             timestamp: Date.now(),
-          })
+          }
+          lastProbeAt = Date.now()
+
+          sendJson(res, 200, cachedData)
         } catch (err) {
           sendJson(res, 500, { error: String(err && err.message ? err.message : err) })
         }
