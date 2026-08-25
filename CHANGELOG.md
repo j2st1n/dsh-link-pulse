@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.6] - 2026-08-25
+
+### Docs
+- 补充 README 中的 Keep-Alive 纯 1-RTT 测速原理与冷握手 vs 热长连接对比说明表。
+
 ## [0.1.5] - 2026-08-25
 
 ### Changed
