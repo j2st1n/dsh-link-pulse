@@ -201,6 +201,12 @@ window.__ModuleLoader__.load({
 
       const otherProviders = (data?.providers || []).filter((p) => p.id !== activeProviderInfo?.id)
 
+      const segments = [
+        { text: providerDisplayName, color: T.label, bold: true },
+        { text: modelShortName, color: T.secondary },
+        { text: currentLatency > 0 ? `${currentLatency}ms` : '探测中', color: statusColor, bold: true },
+      ]
+
       const node = h(
         'button',
         {
@@ -222,44 +228,39 @@ window.__ModuleLoader__.load({
         }),
         wide &&
           h(
-            'div',
+            'span',
             {
               style: {
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
-                justifyContent: 'space-between',
-                flex: 1,
-                overflow: 'hidden',
+                lineHeight: '18px',
                 whiteSpace: 'nowrap',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
               },
             },
-            h(
-              'div',
-              {
-                style: {
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 3,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                },
-              },
-              h('span', { style: { fontWeight: 500, color: T.label } }, providerDisplayName),
-              h('span', { style: { color: T.secondary } }, '·'),
-              h('span', { style: { color: T.secondary, overflow: 'hidden', textOverflow: 'ellipsis' } }, modelShortName),
-            ),
-            h(
-              'span',
-              {
-                style: {
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: statusColor,
-                  marginLeft: 6,
-                  flexShrink: 0,
-                },
-              },
-              currentLatency > 0 ? `${currentLatency}ms` : '探测中',
+            segments.flatMap((s, i) =>
+              i === 0
+                ? [h('span', { key: `s${i}`, style: { color: s.color, fontWeight: 500, flexShrink: 0 } }, s.text)]
+                : [
+                    h('span', { key: `sep${i}`, style: { color: T.secondary, margin: '0 5px', opacity: 0.7, flexShrink: 0 } }, '·'),
+                    h(
+                      'span',
+                      {
+                        key: `s${i}`,
+                        style: {
+                          color: s.color,
+                          fontWeight: s.bold ? 500 : undefined,
+                          fontVariantNumeric: 'tabular-nums',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          flexShrink: i === segments.length - 1 ? 0 : 1,
+                        },
+                      },
+                      s.text,
+                    ),
+                  ],
             ),
           ),
       )
