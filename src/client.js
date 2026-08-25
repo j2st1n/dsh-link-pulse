@@ -252,7 +252,7 @@ window.__ModuleLoader__.load({
 
       if (!hovering || isOpen) return node
 
-      const providers = data?.providers || []
+      const otherProviders = (data?.providers || []).filter((p) => p.id !== activeProviderInfo?.id)
       return h(
         'div',
         {
@@ -292,23 +292,24 @@ window.__ModuleLoader__.load({
                 color: statusColor,
                 fontWeight: 600,
                 marginTop: 2,
-                marginBottom: 6,
+                marginBottom: otherProviders.length > 0 ? 6 : 0,
               },
             },
             `⚡ ${currentLatency > 0 ? currentLatency + ' ms' : '检测中'}`,
           ),
-          h(
-            'div',
-            {
-              style: {
-                borderTop: `1px dashed ${T.border}`,
-                paddingTop: 6,
-                color: T.secondary,
+          otherProviders.length > 0 &&
+            h(
+              'div',
+              {
+                style: {
+                  borderTop: `1px dashed ${T.border}`,
+                  paddingTop: 6,
+                  color: T.secondary,
+                },
               },
-            },
-            '🌐 Provider 链路一览',
-          ),
-          providers.map((p, i) =>
+              '🌐 其它 Provider 链路',
+            ),
+          otherProviders.map((p, i) =>
             h(
               'div',
               {
@@ -322,7 +323,13 @@ window.__ModuleLoader__.load({
               h(
                 'span',
                 { style: { display: 'flex', alignItems: 'center', gap: 4 } },
-                h('span', { style: { ...dotStyle(getQualityColor(p.probe?.quality, p.probe?.latencyMs)), width: 5, height: 5 } }),
+                h('span', {
+                  style: {
+                    ...dotStyle(getQualityColor(p.probe?.quality, p.probe?.latencyMs)),
+                    width: 5,
+                    height: 5,
+                  },
+                }),
                 p.name,
               ),
               h(
@@ -576,75 +583,80 @@ window.__ModuleLoader__.load({
                     marginBottom: '10px',
                   },
                 },
-                '🌐 已接入 Provider 链路测速对比',
+                '🌐 其它可用 Provider 链路测速',
               ),
-              h(
-                'div',
-                { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-                providers.map((p, idx) => {
-                  const lat = p.probe?.latencyMs ?? -1
-                  const qual = p.probe?.quality || 'offline'
-                  const col = getQualityColor(qual, lat)
-                  const isCurrent = activeProviderInfo?.id === p.id
-
+              (() => {
+                const otherProviders = providers.filter((p) => p.id !== activeProviderInfo?.id)
+                if (otherProviders.length === 0) {
                   return h(
                     'div',
                     {
-                      key: idx,
                       style: {
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '8px 10px',
-                        borderRadius: '8px',
-                        background: isCurrent ? 'rgba(59,130,246,.08)' : 'rgba(0,0,0,.03)',
-                        border: `1px solid ${isCurrent ? 'rgba(59,130,246,.3)' : 'transparent'}`,
+                        fontSize: '11px',
+                        color: T.secondary,
+                        textAlign: 'center',
+                        padding: '12px 0',
                       },
                     },
-                    h(
-                      'div',
-                      null,
-                      h(
-                        'div',
-                        { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-                        h('span', { style: dotStyle(col) }),
-                        h('span', { style: { fontWeight: 600, fontSize: '12px' } }, p.name),
-                        isCurrent &&
-                          h(
-                            'span',
-                            {
-                              style: {
-                                fontSize: '9px',
-                                color: T.brand,
-                                fontWeight: 600,
-                              },
-                            },
-                            '● 当前主力',
-                          ),
-                      ),
-                      h(
-                        'div',
-                        { style: { fontSize: '10px', color: T.secondary, marginTop: '2px' } },
-                        p.baseURL || '官方内置通道',
-                      ),
-                    ),
-                    h(
-                      'div',
-                      { style: { textAlign: 'right' } },
-                      h(
-                        'div',
-                        { style: { fontWeight: 700, fontSize: '13px', color: col } },
-                        lat > 0 ? `${lat} ms` : '超时/离线',
-                      ),
-                      h(
-                        'div',
-                        { style: { fontSize: '9px', color: T.secondary } },
-                        lat > 0 ? (lat < 200 ? '极佳' : '良好') : '不可达',
-                      ),
-                    ),
+                    '暂无其它已接入的 Provider',
                   )
-                }),
-              ),
+                }
+
+                return h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+                  otherProviders.map((p, idx) => {
+                    const lat = p.probe?.latencyMs ?? -1
+                    const qual = p.probe?.quality || 'offline'
+                    const col = getQualityColor(qual, lat)
+
+                    return h(
+                      'div',
+                      {
+                        key: idx,
+                        style: {
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '8px 10px',
+                          borderRadius: '8px',
+                          background: 'rgba(0,0,0,.03)',
+                          border: `1px solid transparent`,
+                        },
+                      },
+                      h(
+                        'div',
+                        null,
+                        h(
+                          'div',
+                          { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                          h('span', { style: dotStyle(col) }),
+                          h('span', { style: { fontWeight: 600, fontSize: '12px' } }, p.name),
+                        ),
+                        h(
+                          'div',
+                          { style: { fontSize: '10px', color: T.secondary, marginTop: '2px' } },
+                          p.baseURL || '官方内置通道',
+                        ),
+                      ),
+                      h(
+                        'div',
+                        { style: { textAlign: 'right' } },
+                        h(
+                          'div',
+                          { style: { fontWeight: 700, fontSize: '13px', color: col } },
+                          lat > 0 ? `${lat} ms` : '超时/离线',
+                        ),
+                        h(
+                          'div',
+                          { style: { fontSize: '9px', color: T.secondary } },
+                          lat > 0 ? (lat < 200 ? '极佳' : '良好') : '不可达',
+                        ),
+                      ),
+                    )
+                  }),
+                )
+              })(),
             ),
           ),
         ),
