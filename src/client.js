@@ -107,8 +107,13 @@ window.__ModuleLoader__.load({
               '[data-slot="conversation.input.model"], button[class*="modelSelect"], div[class*="modelSelector"]',
             )
             if (modelButton && modelButton.textContent) {
-              const text = modelButton.textContent.trim()
-              if (text && text.length < 30) {
+              let text = modelButton.textContent.trim()
+              // 剥离开关/标签 UI 残留，如「default」「推理等级」「high」等
+              text = text
+                .split(/[\n|·•]/)[0]
+                .replace(/\s*(default|推理等级|模型|model)\s*/gi, '')
+                .trim()
+              if (text && text.length < 30 && /[a-zA-Z0-9\-_.]/.test(text)) {
                 setActiveModel(text)
                 return
               }
@@ -128,8 +133,10 @@ window.__ModuleLoader__.load({
     function FooterEntry(props) {
       const { wide } = props
       const [isOpen, setIsOpen] = useState(overlayOpen)
+      const [hovering, setHovering] = useState(false)
       const [data, setData] = useState(null)
       const [loading, setLoading] = useState(false)
+      const hoverTimerRef = React.useRef(null)
 
       useEffect(() => {
         listeners.add(setIsOpen)
@@ -171,26 +178,22 @@ window.__ModuleLoader__.load({
       const providerDisplayName = activeProviderInfo?.name || 'CPA'
       const modelShortName = formatModelShortName(activeModel)
 
-      const tooltipText = useMemo(() => {
-        if (!data?.providers) return '链路测速中...'
-        const lines = [`🎯 当前对话模型: ${activeModel}`]
-        lines.push(`🏢 归属供应商: ${providerDisplayName}`)
-        lines.push(`⚡ 实时往返延迟: ${currentLatency > 0 ? currentLatency + ' ms' : '检测中'}`)
-        lines.push('────────────────────────')
-        lines.push('🌐 已接入 Provider 链路一览:')
-        for (const p of data.providers) {
-          const lat = p.probe?.latencyMs > 0 ? `${p.probe.latencyMs}ms` : '离线'
-          lines.push(`• ${p.name}: ${lat}`)
-        }
-        return lines.join('\n')
-      }, [data, activeModel, providerDisplayName, currentLatency])
+      const onMouseEnter = useCallback(() => {
+        clearTimeout(hoverTimerRef.current)
+        hoverTimerRef.current = setTimeout(() => setHovering(true), 220)
+      }, [])
+      const onMouseLeave = useCallback(() => {
+        clearTimeout(hoverTimerRef.current)
+        setHovering(false)
+      }, [])
 
-      return h(
+      const node = h(
         'button',
         {
           className: 'pulse-btn',
           onClick: () => setOverlay(!isOpen),
-          title: tooltipText,
+          onMouseEnter: onMouseEnter,
+          onMouseLeave: onMouseLeave,
           style: {
             ...btnBase,
             width: '100%',
@@ -245,6 +248,96 @@ window.__ModuleLoader__.load({
               currentLatency > 0 ? `${currentLatency}ms` : '探测中',
             ),
           ),
+      )
+
+      if (!hovering || isOpen) return node
+
+      const providers = data?.providers || []
+      return h(
+        'div',
+        {
+          style: { position: 'relative', width: '100%' },
+          onMouseEnter: onMouseEnter,
+          onMouseLeave: onMouseLeave,
+        },
+        node,
+        h(
+          'div',
+          {
+            className: 'pulse-panel-enter',
+            style: {
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 'calc(100% + 6px)',
+              background: T.bg,
+              border: `1px solid ${T.border2}`,
+              borderRadius: '10px',
+              boxShadow: '0 8px 24px rgba(0,0,0,.18)',
+              padding: '10px 12px',
+              fontSize: '11px',
+              lineHeight: '17px',
+              color: T.label,
+              whiteSpace: 'pre',
+              z: 100,
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+            },
+          },
+          h('div', { style: { fontWeight: 600, fontSize: '12px', marginBottom: 4 } }, `🎯 ${activeModel}`),
+          h('div', { style: { color: T.secondary } }, `🏢 ${providerDisplayName}`),
+          h(
+            'div',
+            {
+              style: {
+                color: statusColor,
+                fontWeight: 600,
+                marginTop: 2,
+                marginBottom: 6,
+              },
+            },
+            `⚡ ${currentLatency > 0 ? currentLatency + ' ms' : '检测中'}`,
+          ),
+          h(
+            'div',
+            {
+              style: {
+                borderTop: `1px dashed ${T.border}`,
+                paddingTop: 6,
+                color: T.secondary,
+              },
+            },
+            '🌐 Provider 链路一览',
+          ),
+          providers.map((p, i) =>
+            h(
+              'div',
+              {
+                key: i,
+                style: {
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                },
+              },
+              h(
+                'span',
+                { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+                h('span', { style: { ...dotStyle(getQualityColor(p.probe?.quality, p.probe?.latencyMs)), width: 5, height: 5 } }),
+                p.name,
+              ),
+              h(
+                'span',
+                {
+                  style: {
+                    color: getQualityColor(p.probe?.quality, p.probe?.latencyMs),
+                    fontWeight: 600,
+                  },
+                },
+                p.probe?.latencyMs > 0 ? `${p.probe.latencyMs} ms` : '离线',
+              ),
+            ),
+          ),
+        ),
       )
     }
 
