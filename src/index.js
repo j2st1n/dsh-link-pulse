@@ -1,6 +1,8 @@
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
+import tls from 'node:tls'
+import net from 'node:net'
 import jsYaml from 'js-yaml'
 
 export const name = 'link-pulse'
@@ -77,57 +79,111 @@ export function loadDynamicProviders() {
   }
 }
 
+/**
+ * 测量 Keep-Alive 状态下的真实单次 RTT 往返延迟
+ * (在已建立的加密 socket 上发送 HEAD 并测量首字节返回耗时)
+ */
 export async function probeLatency(url) {
   if (!url || !/^https?:\/\//i.test(url)) {
     return { latencyMs: -1, status: 'no_url', quality: 'offline', error: '无有效网络地址' }
   }
 
-  let probeUrl = url
-  try {
-    const parsed = new URL(url)
-    probeUrl = `${parsed.protocol}//${parsed.host}`
-  } catch {}
+  return new Promise((resolve) => {
+    let parsed
+    try {
+      parsed = new URL(url)
+    } catch {
+      return resolve({ latencyMs: -1, quality: 'error', reachable: false, error: 'URL 格式错误' })
+    }
 
-  const start = performance.now()
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 3500)
+    const host = parsed.hostname
+    const isHttps = parsed.protocol === 'https:'
+    const port = parseInt(parsed.port, 10) || (isHttps ? 443 : 80)
+    const timeout = 3500
 
-  try {
-    const res = await fetch(probeUrl, {
-      method: 'HEAD',
-      signal: controller.signal,
-      headers: { 'User-Agent': 'DSH-LinkPulse/1.0' },
-    }).catch(async () => {
-      return await fetch(probeUrl, {
-        method: 'GET',
-        signal: controller.signal,
-        headers: { 'User-Agent': 'DSH-LinkPulse/1.0' },
+    let timer = null
+    let socket = null
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer)
+      if (socket) {
+        socket.removeAllListeners()
+        socket.destroy()
+      }
+    }
+
+    timer = setTimeout(() => {
+      cleanup()
+      resolve({ latencyMs: 3500, quality: 'timeout', reachable: false, error: '请求超时 (>3.5s)' })
+    }, timeout)
+
+    try {
+      const onEstablished = (sock) => {
+        const start = performance.now()
+        const path = parsed.pathname || '/'
+        sock.write(`HEAD ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: DSH-LinkPulse/1.0\r\nConnection: close\r\n\r\n`)
+
+        sock.once('data', () => {
+          const latencyMs = Math.max(1, Math.round(performance.now() - start))
+          cleanup()
+
+          let quality = 'excellent'
+          if (latencyMs > 600) quality = 'slow'
+          else if (latencyMs > 200) quality = 'good'
+
+          resolve({
+            latencyMs,
+            quality,
+            reachable: true,
+          })
+        })
+      }
+
+      if (isHttps) {
+        socket = tls.connect({
+          host,
+          port,
+          servername: host,
+          rejectUnauthorized: false,
+          timeout,
+        }, () => onEstablished(socket))
+      } else {
+        socket = net.connect({
+          host,
+          port,
+          timeout,
+        }, () => onEstablished(socket))
+      }
+
+      socket.on('error', (err) => {
+        cleanup()
+        resolve({
+          latencyMs: -1,
+          quality: 'error',
+          reachable: false,
+          error: err.message || '连接失败',
+        })
       })
-    })
 
-    clearTimeout(timeoutId)
-    const latencyMs = Math.round(performance.now() - start)
-
-    let quality = 'excellent'
-    if (latencyMs > 600) quality = 'slow'
-    else if (latencyMs > 200) quality = 'good'
-
-    return {
-      latencyMs,
-      httpStatus: res.status,
-      quality,
-      reachable: true,
+      socket.on('timeout', () => {
+        cleanup()
+        resolve({
+          latencyMs: 3500,
+          quality: 'timeout',
+          reachable: false,
+          error: '连接超时',
+        })
+      })
+    } catch (err) {
+      cleanup()
+      resolve({
+        latencyMs: -1,
+        quality: 'error',
+        reachable: false,
+        error: err.message || '连接异常',
+      })
     }
-  } catch (err) {
-    clearTimeout(timeoutId)
-    const isTimeout = err.name === 'AbortError'
-    return {
-      latencyMs: isTimeout ? 3500 : -1,
-      quality: isTimeout ? 'timeout' : 'error',
-      reachable: false,
-      error: isTimeout ? '请求超时 (>3.5s)' : (err.message || '连接失败'),
-    }
-  }
+  })
 }
 
 function sendJson(res, statusCode, data) {
