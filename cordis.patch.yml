@@ -1,0 +1,4 @@
+# dsh-link-pulse bundle patch: one insert adding the host row.
+- insert:
+    - id: link-pulse
+      name: dsh-link-pulse
