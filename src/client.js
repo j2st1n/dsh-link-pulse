@@ -7,6 +7,8 @@ window.__ModuleLoader__.load({
     const h = React.createElement
     const { useEffect, useState, useCallback, useMemo } = React
 
+    let globalCtx = null
+
     const T = {
       bg: 'var(--dsw-alias-bg-layer-2, #ffffff)',
       layer: 'var(--dsw-alias-bg-layer-2, #ffffff)',
@@ -62,7 +64,7 @@ window.__ModuleLoader__.load({
       whiteSpace: 'nowrap',
     }
 
-    // ---------- 全局单例共享状态（确保内外完全同源同步） ----------
+    // ---------- 全局单例共享状态（网络延迟数据） ----------
     const store = {
       state: {
         data: null,
@@ -128,37 +130,65 @@ window.__ModuleLoader__.load({
       return modelId.split(/[-_]/)[0] || modelId
     }
 
-    function useActiveModel(defaultModel) {
-      const [activeModel, setActiveModel] = useState(defaultModel || 'gemini-3.7-flash-high')
+    /**
+     * 权威实时抓取：直接从 DSH 官方 sessions 与 modelDirectories 服务订阅当前正在对话的模型与供应商
+     */
+    function useCurrentActiveModel(defaultConfig) {
+      const [selection, setSelection] = useState(() => ({
+        provider: defaultConfig?.provider || 'cpa',
+        model: defaultConfig?.model || 'gemini-3.7-flash-high',
+      }))
 
       useEffect(() => {
-        const detectModel = () => {
+        if (!globalCtx) return
+
+        const getSessions = () => (globalCtx.get ? globalCtx.get('sessions') : globalCtx.sessions)
+        const getModelDirs = () => (globalCtx.get ? globalCtx.get('modelDirectories') : globalCtx.modelDirectories)
+
+        let dirUnsub = null
+
+        const sync = () => {
           try {
-            const modelButton = document.querySelector(
-              '[data-slot="conversation.input.model"], button[class*="modelSelect"], div[class*="modelSelector"]',
-            )
-            if (modelButton && modelButton.textContent) {
-              let text = modelButton.textContent.trim()
-              // 剥离「default」「推理等级」「模型」等 UI 标签
-              text = text
-                .split(/[\n|·•]/)[0]
-                .replace(/\s*(default|推理等级|模型|model)\s*/gi, '')
-                .trim()
-              if (text && text.length < 30 && /[a-zA-Z0-9\-_.]/.test(text)) {
-                setActiveModel(text)
-                return
+            const sessions = getSessions()
+            const modelDirs = getModelDirs()
+            if (!sessions || !modelDirs) return
+
+            const curSessionId = sessions.list?.getSnapshot?.()?.current
+            if (!curSessionId) return
+
+            const dir = modelDirs.directoryFor?.(curSessionId)
+            if (!dir) return
+
+            if (dirUnsub) dirUnsub()
+            dirUnsub = dir.store?.subscribe ? dir.store.subscribe(applyDirectorySnapshot) : null
+
+            function applyDirectorySnapshot() {
+              const snap = dir.store?.getSnapshot?.()
+              if (snap?.current?.provider && snap?.current?.model) {
+                setSelection({
+                  provider: snap.current.provider,
+                  model: snap.current.model,
+                  reasoningEffort: snap.current.reasoningEffort,
+                })
               }
             }
+
+            applyDirectorySnapshot()
           } catch {}
-          if (defaultModel) setActiveModel(defaultModel)
         }
 
-        detectModel()
-        const timer = setInterval(detectModel, 3000)
-        return () => clearInterval(timer)
-      }, [defaultModel])
+        sync()
 
-      return activeModel
+        const sessions = getSessions()
+        const unsubSessions = sessions?.list?.subscribe ? sessions.list.subscribe(sync) : null
+
+        return () => {
+          if (unsubSessions) unsubSessions()
+          if (dirUnsub) dirUnsub()
+        }
+      }, [defaultConfig])
+
+      return selection
     }
 
     function FooterEntry(props) {
@@ -174,21 +204,28 @@ window.__ModuleLoader__.load({
       }, [])
 
       const data = state.data
-      const defaultModel = data?.defaultModelConfig?.model || 'gemini-3.7-flash-high'
-      const activeModel = useActiveModel(defaultModel)
+      const defaultModelConfig = data?.defaultModelConfig
+      const activeSelection = useCurrentActiveModel(defaultModelConfig)
 
       const activeProviderInfo = useMemo(() => {
-        if (!data || !data.providers) return null
-        const map = data.modelToProviderMap || {}
-        const pId = map[activeModel.toLowerCase()] || data.defaultModelConfig?.provider || 'cpa'
-        return data.providers.find((p) => p.id === pId) || data.providers[0] || null
-      }, [data, activeModel])
+        if (!data) return null
+        const pId = activeSelection.provider || data.defaultModelConfig?.provider || 'cpa'
+        if (data.providerMap && data.providerMap[pId]) {
+          return data.providerMap[pId]
+        }
+        if (data.providers) {
+          const found = data.providers.find((p) => p.id === pId)
+          if (found) return found
+        }
+        // 未识别的 provider：展示其真实 id，绝不冒名顶替列表中的第一个供应商
+        return { id: pId, name: String(pId).toUpperCase(), baseURL: '', probe: null }
+      }, [data, activeSelection.provider])
 
       const currentLatency = activeProviderInfo?.probe?.latencyMs ?? -1
       const currentQuality = activeProviderInfo?.probe?.quality || 'offline'
       const statusColor = getQualityColor(currentQuality, currentLatency)
-      const providerDisplayName = activeProviderInfo?.name || 'CPA'
-      const modelShortName = formatModelShortName(activeModel)
+      const providerDisplayName = activeProviderInfo?.name || activeSelection.provider.toUpperCase()
+      const modelShortName = formatModelShortName(activeSelection.model)
 
       const onMouseEnter = useCallback(() => {
         clearTimeout(hoverTimerRef.current)
@@ -297,7 +334,7 @@ window.__ModuleLoader__.load({
               fontFamily: 'system-ui, -apple-system, sans-serif',
             },
           },
-          h('div', { style: { fontWeight: 600, fontSize: '12px', marginBottom: 4 } }, `🎯 ${activeModel}`),
+          h('div', { style: { fontWeight: 600, fontSize: '12px', marginBottom: 4 } }, `🎯 ${activeSelection.model}`),
           h('div', { style: { color: T.secondary } }, `🏢 ${providerDisplayName}`),
           h(
             'div',
@@ -368,15 +405,22 @@ window.__ModuleLoader__.load({
       const data = state.data
       const loading = state.loading
 
-      const defaultModel = data?.defaultModelConfig?.model || 'gemini-3.7-flash-high'
-      const activeModel = useActiveModel(defaultModel)
+      const defaultModelConfig = data?.defaultModelConfig
+      const activeSelection = useCurrentActiveModel(defaultModelConfig)
 
       const activeProviderInfo = useMemo(() => {
-        if (!data || !data.providers) return null
-        const map = data.modelToProviderMap || {}
-        const pId = map[activeModel.toLowerCase()] || data.defaultModelConfig?.provider || 'cpa'
-        return data.providers.find((p) => p.id === pId) || data.providers[0] || null
-      }, [data, activeModel])
+        if (!data) return null
+        const pId = activeSelection.provider || data.defaultModelConfig?.provider || 'cpa'
+        if (data.providerMap && data.providerMap[pId]) {
+          return data.providerMap[pId]
+        }
+        if (data.providers) {
+          const found = data.providers.find((p) => p.id === pId)
+          if (found) return found
+        }
+        // 未识别的 provider：展示其真实 id，绝不冒名顶替列表中的第一个供应商
+        return { id: pId, name: String(pId).toUpperCase(), baseURL: '', probe: null }
+      }, [data, activeSelection.provider])
 
       if (!isOpen) return null
 
@@ -385,6 +429,7 @@ window.__ModuleLoader__.load({
       const currentQuality = activeProviderInfo?.probe?.quality || 'offline'
       const statusColor = getQualityColor(currentQuality, currentLatency)
       const otherProviders = providers.filter((p) => p.id !== activeProviderInfo?.id)
+      const providerDisplayName = activeProviderInfo?.name || activeSelection.provider.toUpperCase()
 
       return h(
         'div',
@@ -441,7 +486,7 @@ window.__ModuleLoader__.load({
                 h(
                   'div',
                   { style: { fontSize: '11px', color: T.secondary } },
-                  '仅探测本机实际接入的 LLM Provider 网关',
+                  '实时订阅当前对话供应商与模型状态',
                 ),
               ),
             ),
@@ -523,7 +568,7 @@ window.__ModuleLoader__.load({
                   'div',
                   { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
                   h('span', { style: dotStyle(statusColor) }),
-                  h('span', { style: { fontWeight: 600, fontSize: '14px' } }, activeModel),
+                  h('span', { style: { fontWeight: 600, fontSize: '14px' } }, activeSelection.model),
                   h(
                     'span',
                     {
@@ -536,7 +581,7 @@ window.__ModuleLoader__.load({
                         fontWeight: 600,
                       },
                     },
-                    `供应商: ${activeProviderInfo?.name || 'CPA'}`,
+                    `供应商: ${providerDisplayName}`,
                   ),
                 ),
                 h(
@@ -657,6 +702,8 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
+      globalCtx = ctx
+
       ctx.effect(() => {
         const el = document.createElement('style')
         el.id = 'dsh-link-pulse-styles'

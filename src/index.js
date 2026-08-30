@@ -8,6 +8,37 @@ import jsYaml from 'js-yaml'
 export const name = 'link-pulse'
 export const inject = ['webServer']
 
+const KNOWN_PROVIDER_DEFAULTS = {
+  deepseek: {
+    name: 'DeepSeek 官方',
+    baseURL: 'https://api.deepseek.com',
+  },
+  'deepseek-official': {
+    name: 'DeepSeek 官方',
+    baseURL: 'https://api.deepseek.com',
+  },
+  'opencode-go': {
+    name: 'OpenCode GO',
+    baseURL: 'https://opencode.ai',
+  },
+  openai: {
+    name: 'OpenAI 官方',
+    baseURL: 'https://api.openai.com',
+  },
+  anthropic: {
+    name: 'Anthropic 官方',
+    baseURL: 'https://api.anthropic.com',
+  },
+  google: {
+    name: 'Google Gemini',
+    baseURL: 'https://generativelanguage.googleapis.com',
+  },
+  openrouter: {
+    name: 'OpenRouter',
+    baseURL: 'https://openrouter.ai',
+  },
+}
+
 function getSettingsPath() {
   const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
   return path.join(dshHome, 'settings.yaml')
@@ -30,52 +61,47 @@ export function loadDynamicProviders() {
   }
 
   const providers = []
-  const modelToProviderMap = {}
+  const providerMap = {}
 
   for (const [providerId, pConfig] of Object.entries(providersConfig)) {
     const rawModels = pConfig.models || []
     const modelList = rawModels.map((m) => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean)
     
-    for (const m of modelList) {
-      modelToProviderMap[m.toLowerCase()] = providerId
-    }
+    const known = KNOWN_PROVIDER_DEFAULTS[providerId] || {}
+    const targetBaseUrl = pConfig.baseURL || known.baseURL || ''
+    const displayName = pConfig.name || known.name || providerId.toUpperCase()
 
-    let targetBaseUrl = pConfig.baseURL || ''
-    if (!targetBaseUrl && providerId === 'opencode-go') {
-      targetBaseUrl = 'https://api.deepseek.com'
-    }
-
-    providers.push({
+    const item = {
       id: providerId,
-      name: providerId.toUpperCase(),
+      name: displayName,
       baseURL: targetBaseUrl,
       api: pConfig.api || 'openai-responses',
       models: modelList,
       isDefault: defaultModelConfig.provider === providerId,
-    })
+    }
+
+    providers.push(item)
+    providerMap[providerId] = item
   }
 
-  if (!providers.some((p) => p.id === 'deepseek' || p.id === 'deepseek-official')) {
-    const dsModels = ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1']
-    for (const m of dsModels) {
-      if (!modelToProviderMap[m]) {
-        modelToProviderMap[m] = 'deepseek'
-      }
-    }
-    providers.push({
-      id: 'deepseek',
+  // 如果未配置官方 deepseek（DSH 内置官方路由的 provider id 为 deepseek-official），补充作为独立官方探测节点
+  if (!providerMap['deepseek-official']) {
+    const dsItem = {
+      id: 'deepseek-official',
       name: 'DeepSeek 官方',
       baseURL: 'https://api.deepseek.com',
       api: 'deepseek-native',
-      models: dsModels,
-      isDefault: defaultModelConfig.provider === 'deepseek',
-    })
+      models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      isDefault: defaultModelConfig.provider === 'deepseek-official',
+    }
+    providers.push(dsItem)
+    providerMap['deepseek-official'] = dsItem
   }
 
   return {
     providers,
+    providerMap,
     defaultModelConfig,
-    modelToProviderMap,
   }
 }
 
@@ -213,7 +239,7 @@ export function apply(ctx) {
             return sendJson(res, 200, cachedData)
           }
 
-          const { providers, defaultModelConfig, modelToProviderMap } = loadDynamicProviders()
+          const { providers, providerMap, defaultModelConfig } = loadDynamicProviders()
 
           const probePromises = providers.map(async (p) => {
             const probeResult = await probeLatency(p.baseURL)
@@ -224,11 +250,15 @@ export function apply(ctx) {
           })
 
           const probedProviders = await Promise.all(probePromises)
+          const probedMap = {}
+          for (const item of probedProviders) {
+            probedMap[item.id] = item
+          }
 
           cachedData = {
             defaultModelConfig,
-            modelToProviderMap,
             providers: probedProviders,
+            providerMap: probedMap,
             timestamp: Date.now(),
           }
           lastProbeAt = Date.now()

@@ -9,12 +9,28 @@ describe('dsh-link-pulse tests', () => {
     assert.deepEqual(inject, ['webServer'])
   })
 
-  test('loadDynamicProviders loads providers and mappings', () => {
-    const { providers, defaultModelConfig, modelToProviderMap } = loadDynamicProviders()
+  test('loadDynamicProviders loads providers and providerMap correctly', () => {
+    const { providers, providerMap, defaultModelConfig } = loadDynamicProviders()
     assert.ok(Array.isArray(providers))
     assert.ok(providers.length > 0)
-    assert.ok(typeof modelToProviderMap === 'object')
+    assert.ok(typeof providerMap === 'object')
     assert.ok(defaultModelConfig)
+
+    // 验证官方 deepseek 和 opencode-go 网关分离，绝不混淆
+    // DSH 内置官方 DeepSeek 路由的运行时 provider id 为 deepseek-official，
+    // 兜底节点必须使用同 id，否则客户端按当前会话 provider 查找会落空
+    if (providerMap['deepseek-official']) {
+      assert.equal(providerMap['deepseek-official'].baseURL, 'https://api.deepseek.com')
+      assert.equal(providerMap['deepseek-official'].name, 'DeepSeek 官方')
+    }
+    if (providerMap['deepseek']) {
+      assert.equal(providerMap['deepseek'].baseURL, 'https://api.deepseek.com')
+      assert.equal(providerMap['deepseek'].name, 'DeepSeek 官方')
+    }
+    if (providerMap['opencode-go']) {
+      assert.equal(providerMap['opencode-go'].baseURL, 'https://opencode.ai')
+      assert.equal(providerMap['opencode-go'].name, 'OpenCode GO')
+    }
   })
 
   test('probeLatency handles invalid or empty URLs', async () => {

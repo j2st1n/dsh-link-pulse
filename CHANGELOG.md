@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.8] - 2026-08-30
+
+### Fixed
+- **官方 DeepSeek V4 供应商误显为 CPA**：DSH 内置官方路由的运行时 provider id 为 `deepseek-official`（`dsh-llm-deepseek` 中 `PROVIDER` 常量），而插件兜底官方节点注册的 id 是 `deepseek`，导致客户端按当前会话 provider 查找落空后错误兜底到 provider 列表第一项（CPA）。兜底节点 id 修正为 `deepseek-official`，并同步注册 `KNOWN_PROVIDER_DEFAULTS` 映射。
+- **未识别 Provider 张冠李戴**：客户端在 providerMap 查找失败时不再冒名显示列表第一个供应商的名称与延迟，改为展示该 provider 的真实 id（大写），延迟显示为探测中。
+
+## [0.1.7] - 2026-08-29
+
+### Fixed & Refactored
+- **权威状态订阅重构**：彻底移除客户端定时器轮询与 DOM 抓取，接入 DSH 原生 `sessions` 与 `modelDirectories` 服务，实现模型切换时 0 毫秒即选即切，无需发消息触发。
+- **Provider 网关与同名模型隔离**：将各 Provider 独立隔离（官方 `deepseek` 对应 `https://api.deepseek.com`，`opencode-go` 对应 `https://opencode.ai`），解决 DeepSeek V4 系列在官方与 OpenCode GO 之间的命名空间冲突与错误归属问题。
+
+
 ## [0.1.6] - 2026-08-25
 
 ### Docs
