@@ -39,25 +39,46 @@ const KNOWN_PROVIDER_DEFAULTS = {
   },
 }
 
-function getSettingsPath() {
+const jsType = new jsYaml.Type('tag:yaml.org,2002:js', {
+  kind: 'scalar',
+  construct: (data) => data,
+})
+const yamlSchema = jsYaml.DEFAULT_SCHEMA.extend([jsType])
+
+function getCandidateConfigPaths() {
   const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
-  return path.join(dshHome, 'settings.yaml')
+  return [
+    path.join(dshHome, 'profiles/web/cordis.patch.yml'),
+    path.join(dshHome, 'settings.yaml'),
+    path.join(dshHome, 'cordis.patch.yml'),
+  ]
 }
 
 export function loadDynamicProviders() {
-  const settingsPath = getSettingsPath()
   let settings = {}
-  if (fs.existsSync(settingsPath)) {
-    try {
-      const raw = fs.readFileSync(settingsPath, 'utf8')
-      settings = jsYaml.load(raw) || {}
-    } catch {}
+
+  for (const p of getCandidateConfigPaths()) {
+    if (fs.existsSync(p)) {
+      try {
+        const raw = fs.readFileSync(p, 'utf8')
+        const parsed = jsYaml.load(raw, { schema: yamlSchema })
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item && item.id && item.config) {
+              settings[item.id] = { ...(settings[item.id] || {}), ...item.config }
+            }
+          }
+        } else if (parsed && typeof parsed === 'object') {
+          settings = { ...settings, ...parsed }
+        }
+      } catch {}
+    }
   }
 
   const providersConfig = settings['llm-pi-ai']?.providers || {}
   const defaultModelConfig = settings['agent-default-model'] || {
     provider: 'cpa',
-    model: 'gemini-3.7-flash-high',
+    model: 'gemini-3.8-flash-high',
   }
 
   const providers = []
