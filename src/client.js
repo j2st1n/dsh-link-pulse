@@ -109,25 +109,8 @@ window.__ModuleLoader__.load({
     }
 
     function formatModelShortName(modelId) {
-      if (!modelId) return 'Auto'
-      const m = modelId.toLowerCase()
-      if (m.includes('gemini-3.7') || m.includes('gemini-3-7')) return 'Gemini 3.7'
-      if (m.includes('gemini-2.5') || m.includes('gemini-2-5')) return 'Gemini 2.5'
-      if (m.includes('deepseek-v4-flash') || m.includes('v4-flash')) return 'V4 Flash'
-      if (m.includes('deepseek-v4-pro') || m.includes('v4-pro')) return 'V4 Pro'
-      if (m.includes('deepseek-chat')) return 'Chat'
-      if (m.includes('deepseek-reasoner')) return 'Reasoner'
-      if (m.includes('claude-3-7') || m.includes('claude-3.7')) return 'Claude 3.7'
-      if (m.includes('claude-3-5') || m.includes('claude-3.5')) return 'Claude 3.5'
-      if (m.includes('gpt-5')) return 'GPT-5.6'
-      if (m.includes('gpt-4o')) return 'GPT-4o'
-      if (m.includes('qwen3.7') || m.includes('qwen-3.7')) return 'Qwen 3.7'
-      if (m.includes('kimi-k3')) return 'Kimi K3'
-      if (m.includes('kimi-k2.7')) return 'Kimi K2.7'
-      if (m.includes('kimi')) return 'Kimi'
-      if (m.includes('minimax-m3')) return 'MiniMax M3'
-      if (m.includes('glm-5')) return 'GLM-5'
-      return modelId.split(/[-_]/)[0] || modelId
+      // 展示完整的 provider-owned model ID，不做 GPT/Gemini/Claude 等简称映射。
+      return modelId || 'Auto'
     }
 
     /**
@@ -135,17 +118,40 @@ window.__ModuleLoader__.load({
      */
     function useCurrentActiveModel(defaultConfig) {
       const [selection, setSelection] = useState(() => ({
-        provider: defaultConfig?.provider || 'cpa',
-        model: defaultConfig?.model || 'gemini-3.7-flash-high',
+        provider: defaultConfig?.provider || '',
+        model: defaultConfig?.model || '',
       }))
+
+      // 后端状态异步到达时，用实际配置补齐初始选择；不再硬编码 CPA/Gemini。
+      useEffect(() => {
+        if (!defaultConfig?.provider || !defaultConfig?.model) return
+        setSelection((current) => current?.provider && current?.model ? current : {
+          provider: defaultConfig.provider,
+          model: defaultConfig.model,
+        })
+      }, [defaultConfig?.provider, defaultConfig?.model])
 
       useEffect(() => {
         if (!globalCtx) return
 
         const getSessions = () => (globalCtx.get ? globalCtx.get('sessions') : globalCtx.sessions)
         const getModelDirs = () => (globalCtx.get ? globalCtx.get('modelDirectories') : globalCtx.modelDirectories)
+        const getUiSession = () => (globalCtx.get ? globalCtx.get('uiSession') : globalCtx.uiSession)
 
         let dirUnsub = null
+        let observedSessionId = null
+
+        const getCurrentSessionId = (sessions) => {
+          // uiSession 是 DSH 官方“主视图当前会话”状态源；其 current 快照的 key 为 SessionId。
+          const uiSession = getUiSession()
+          const uiSnapshot = uiSession?.current?.getSnapshot?.()
+          if (uiSnapshot?.key) return uiSnapshot.key
+
+          // 兼容没有 uiSession 的宿主：选择当前仍由 mainView 保留的会话。
+          const list = sessions?.list?.getSnapshot?.()
+          const byId = list?.byId || {}
+          return Object.values(byId).find((item) => (item?.retainedBy?.mainView || 0) > 0)?.id || null
+        }
 
         const sync = () => {
           try {
@@ -153,27 +159,30 @@ window.__ModuleLoader__.load({
             const modelDirs = getModelDirs()
             if (!sessions || !modelDirs) return
 
-            const curSessionId = sessions.list?.getSnapshot?.()?.current
+            const curSessionId = getCurrentSessionId(sessions)
             if (!curSessionId) return
 
-            const dir = modelDirs.directoryFor?.(curSessionId)
-            if (!dir) return
+            if (curSessionId !== observedSessionId) {
+              if (dirUnsub) dirUnsub()
+              observedSessionId = curSessionId
+              const dir = modelDirs.directoryFor?.(curSessionId)
+              if (!dir) return
 
-            if (dirUnsub) dirUnsub()
-            dirUnsub = dir.store?.subscribe ? dir.store.subscribe(applyDirectorySnapshot) : null
+              dirUnsub = dir.store?.subscribe ? dir.store.subscribe(applyDirectorySnapshot) : null
 
-            function applyDirectorySnapshot() {
-              const snap = dir.store?.getSnapshot?.()
-              if (snap?.current?.provider && snap?.current?.model) {
-                setSelection({
-                  provider: snap.current.provider,
-                  model: snap.current.model,
-                  reasoningEffort: snap.current.reasoningEffort,
-                })
+              function applyDirectorySnapshot() {
+                const snap = dir.store?.getSnapshot?.()
+                if (snap?.current?.provider && snap?.current?.model) {
+                  setSelection({
+                    provider: snap.current.provider,
+                    model: snap.current.model,
+                    reasoningEffort: snap.current.reasoningEffort,
+                  })
+                }
               }
-            }
 
-            applyDirectorySnapshot()
+              applyDirectorySnapshot()
+            }
           } catch {}
         }
 
@@ -181,9 +190,12 @@ window.__ModuleLoader__.load({
 
         const sessions = getSessions()
         const unsubSessions = sessions?.list?.subscribe ? sessions.list.subscribe(sync) : null
+        const uiSession = getUiSession()
+        const unsubCurrent = uiSession?.current?.subscribe ? uiSession.current.subscribe(sync) : null
 
         return () => {
           if (unsubSessions) unsubSessions()
+          if (unsubCurrent) unsubCurrent()
           if (dirUnsub) dirUnsub()
         }
       }, [defaultConfig])
@@ -732,7 +744,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply
-    exports.inject = ['slots']
+    exports.inject = ['slots', 'sessions', 'modelDirectories', 'uiSession']
     return module.exports
   },
 })

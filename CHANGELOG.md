@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.12] - 2026-09-28
+
+### Changed
+- 模型名称展示改为完整的原始 model ID（例如 `gpt-6-astra`），不再将 GPT、Gemini、Claude、DeepSeek 等模型简写。
+
+### Fixed
+- 修复模型切换始终显示 CPA · Gemini 3.7：改用 DSH `uiSession.current` 获取主会话 ID，不再读取不存在的 `sessions.list.current`。
+- 补充客户端 `sessions`、`modelDirectories`、`uiSession` 依赖注入声明。
+- 后端默认配置尚未到达时不再硬编码 CPA/Gemini 3.7，改为等待实际默认模型配置。
+
+## [0.1.10] - 2026-09-26
+
+### Fixed
+- 支持解析带自定义 YAML tag（如 `!js`）的 `cordis.patch.yml`，以精准发现动态 Provider 配置。
+
 ## [0.1.8] - 2026-08-30
 
 ### Fixed
