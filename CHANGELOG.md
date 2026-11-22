@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.13] - 2026-11-22
+
+### Fixed
+- **补上状态接口的来源围栏**：`/api/link-pulse/status` 原先以 `kind: 'exact'` 直接注册在 webServer 上，会绕过 DSH 对 `/api` 前缀通道的准入校验（Host / Origin / `Sec-Fetch-Site`），导致伪造 Host（DNS rebinding）、跨站请求与不匹配 Origin 都能读到 provider 列表、网关地址与延迟。现在该路由按 `{ fencedRead: true }` 接入宿主等价的只读围栏：Host 必须是环回、监听器 bind 地址或 `connection.trustedHosts` 之一，拒绝 `Sec-Fetch-Site: cross-site`，带 Origin 时必须同 authority；宿主提供 `connection.isTrusted` 时以其判定为准，缺失时回退本地等价实现。不可信来源一律返回 403，不再返回 200。
+- 顺带补齐写路径防护 `assertTrustedWrite`（在来源校验之后追加 `application/json` 校验），当前插件没有写路由，预留给后续扩展。
+
+### Changed
+- 版本号同步：`package-lock.json` 此前停留在 `0.1.9`，落后 manifest 三个版本，本次一并同步到 `0.1.13`（只改版本字段，未重算依赖树）。
+
 ## [0.1.12] - 2026-09-28
 
 ### Changed

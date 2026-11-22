@@ -108,6 +108,74 @@ window.__ModuleLoader__.load({
       return T.err
     }
 
+    // ---------- 渠道三态：未配置 / 不可达 / 正常 ----------
+    //
+    // 数据层始终返回全部 provider（含未配置项，便于排查），区分只发生在展示层：
+    //   unconfigured  没有 baseURL —— 该渠道根本没接入，不是故障；
+    //   unreachable   有 baseURL 但探针失败 —— 这才是真正的故障/不可达；
+    //   ok            探针拿到 RTT。
+    // 之前两者共用「网关未知」兜底并按 offline 染红，把「没配」误呈现成「坏了」。
+    function providerState(provider) {
+      if (!provider) return 'pending'
+      if (!provider.baseURL) return 'unconfigured'
+      if (!provider.probe) return 'pending'
+      if (provider.probe.reachable === false) return 'unreachable'
+      return provider.probe.latencyMs > 0 ? 'ok' : 'unreachable'
+    }
+
+    /** 未配置项一律用中性色（次要文字色），绝不复用错误红。 */
+    function stateColor(provider) {
+      const state = providerState(provider)
+      if (state === 'unconfigured' || state === 'pending') return T.secondary
+      return getQualityColor(provider?.probe?.quality, provider?.probe?.latencyMs)
+    }
+
+    /** 次级说明行：未配置不再显示空白或「未知」，而是明确说明缺什么。 */
+    function providerGatewayLine(provider) {
+      if (providerState(provider) === 'unconfigured') return '未配置网关地址'
+      return provider?.baseURL || ''
+    }
+
+    /** 质量副标题：未配置不再落进「不可达」。 */
+    function qualityCaption(provider) {
+      const state = providerState(provider)
+      if (state === 'unconfigured') return '未配置'
+      if (state === 'pending') return '探测中'
+      const lat = provider?.probe?.latencyMs ?? -1
+      if (lat <= 0) return '不可达'
+      return lat < 200 ? '极佳' : '良好'
+    }
+
+    function probeLabel(provider) {
+      const state = providerState(provider)
+      if (state === 'unconfigured') return '未配置'
+      if (state === 'pending') return '探测中'
+      if (provider?.probe?.quality === 'timeout') return '超时'
+      return provider?.probe?.latencyMs > 0 ? `${provider.probe.latencyMs} ms` : '不可达'
+    }
+
+    /** 当前会话选中的渠道：未配置时给出可读提示，而不是红色故障态。 */
+    function activeProbeLabel(provider) {
+      if (providerState(provider) === 'unconfigured') return '该渠道未配置'
+      return probeLabel(provider)
+    }
+
+    function activeProvider(data, providerId) {
+      if (!data) return null
+      if (data.providerMap && Object.hasOwn(data.providerMap, providerId)) return data.providerMap[providerId]
+      return data.providers?.find((provider) => provider.id === providerId)
+        ?? { id: providerId, name: providerId.toUpperCase(), baseURL: '', probe: null }
+    }
+
+    /** 主列表只展示已接入的渠道；未配置项收进次级折叠区，不参与主链路对比。 */
+    function splitOtherProviders(data, activeId) {
+      const others = (data?.providers || []).filter((p) => p.id !== activeId)
+      return {
+        shown: others.filter((p) => providerState(p) !== 'unconfigured'),
+        unconfigured: others.filter((p) => providerState(p) === 'unconfigured'),
+      }
+    }
+
     function formatModelShortName(modelId) {
       // 展示完整的 provider-owned model ID，不做 GPT/Gemini/Claude 等简称映射。
       return modelId || 'Auto'
@@ -219,23 +287,13 @@ window.__ModuleLoader__.load({
       const defaultModelConfig = data?.defaultModelConfig
       const activeSelection = useCurrentActiveModel(defaultModelConfig)
 
-      const activeProviderInfo = useMemo(() => {
-        if (!data) return null
-        const pId = activeSelection.provider || data.defaultModelConfig?.provider || 'cpa'
-        if (data.providerMap && data.providerMap[pId]) {
-          return data.providerMap[pId]
-        }
-        if (data.providers) {
-          const found = data.providers.find((p) => p.id === pId)
-          if (found) return found
-        }
-        // 未识别的 provider：展示其真实 id，绝不冒名顶替列表中的第一个供应商
-        return { id: pId, name: String(pId).toUpperCase(), baseURL: '', probe: null }
-      }, [data, activeSelection.provider])
+      const providerId = activeSelection.provider || defaultModelConfig?.provider || ''
+      const activeProviderInfo = useMemo(() => activeProvider(data, providerId), [data, providerId])
 
       const currentLatency = activeProviderInfo?.probe?.latencyMs ?? -1
       const currentQuality = activeProviderInfo?.probe?.quality || 'offline'
-      const statusColor = getQualityColor(currentQuality, currentLatency)
+      // 未配置的当前渠道用中性色，不能因为 offline 就染成故障红。
+      const statusColor = stateColor(activeProviderInfo)
       const providerDisplayName = activeProviderInfo?.name || activeSelection.provider.toUpperCase()
       const modelShortName = formatModelShortName(activeSelection.model)
 
@@ -248,12 +306,14 @@ window.__ModuleLoader__.load({
         setHovering(false)
       }, [])
 
-      const otherProviders = (data?.providers || []).filter((p) => p.id !== activeProviderInfo?.id)
+      // 主列表不含未配置渠道；未配置项只在展开面板的次级区提及。
+      const otherProviderSplit = splitOtherProviders(data, activeProviderInfo?.id)
+      const otherProviders = otherProviderSplit.shown
 
       const segments = [
         { text: providerDisplayName, color: T.label, bold: true },
         { text: modelShortName, color: T.secondary },
-        { text: currentLatency > 0 ? `${currentLatency}ms` : '探测中', color: statusColor, bold: true },
+        { text: activeProbeLabel(activeProviderInfo), color: statusColor, bold: true },
       ]
 
       const node = h(
@@ -358,7 +418,7 @@ window.__ModuleLoader__.load({
                 marginBottom: otherProviders.length > 0 ? 6 : 0,
               },
             },
-            `⚡ ${currentLatency > 0 ? currentLatency + ' ms' : '检测中'}`,
+            `⚡ ${activeProbeLabel(activeProviderInfo)}`,
           ),
           otherProviders.length > 0 &&
             h(
@@ -388,7 +448,7 @@ window.__ModuleLoader__.load({
                 { style: { display: 'flex', alignItems: 'center', gap: 4 } },
                 h('span', {
                   style: {
-                    ...dotStyle(getQualityColor(p.probe?.quality, p.probe?.latencyMs)),
+                    ...dotStyle(stateColor(p)),
                     width: 5,
                     height: 5,
                   },
@@ -399,11 +459,11 @@ window.__ModuleLoader__.load({
                 'span',
                 {
                   style: {
-                    color: getQualityColor(p.probe?.quality, p.probe?.latencyMs),
+                    color: stateColor(p),
                     fontWeight: 600,
                   },
                 },
-                p.probe?.latencyMs > 0 ? `${p.probe.latencyMs} ms` : '离线',
+                probeLabel(p),
               ),
             ),
           ),
@@ -420,27 +480,17 @@ window.__ModuleLoader__.load({
       const defaultModelConfig = data?.defaultModelConfig
       const activeSelection = useCurrentActiveModel(defaultModelConfig)
 
-      const activeProviderInfo = useMemo(() => {
-        if (!data) return null
-        const pId = activeSelection.provider || data.defaultModelConfig?.provider || 'cpa'
-        if (data.providerMap && data.providerMap[pId]) {
-          return data.providerMap[pId]
-        }
-        if (data.providers) {
-          const found = data.providers.find((p) => p.id === pId)
-          if (found) return found
-        }
-        // 未识别的 provider：展示其真实 id，绝不冒名顶替列表中的第一个供应商
-        return { id: pId, name: String(pId).toUpperCase(), baseURL: '', probe: null }
-      }, [data, activeSelection.provider])
+      const providerId = activeSelection.provider || defaultModelConfig?.provider || ''
+      const activeProviderInfo = useMemo(() => activeProvider(data, providerId), [data, providerId])
 
       if (!isOpen) return null
 
-      const providers = data?.providers || []
       const currentLatency = activeProviderInfo?.probe?.latencyMs ?? -1
       const currentQuality = activeProviderInfo?.probe?.quality || 'offline'
-      const statusColor = getQualityColor(currentQuality, currentLatency)
-      const otherProviders = providers.filter((p) => p.id !== activeProviderInfo?.id)
+      const statusColor = stateColor(activeProviderInfo)
+      const otherProviderSplit = splitOtherProviders(data, activeProviderInfo?.id)
+      const otherProviders = otherProviderSplit.shown
+      const unconfiguredProviders = otherProviderSplit.unconfigured
       const providerDisplayName = activeProviderInfo?.name || activeSelection.provider.toUpperCase()
 
       return h(
@@ -605,13 +655,16 @@ window.__ModuleLoader__.load({
                       color: statusColor,
                     },
                   },
-                  currentLatency > 0 ? `${currentLatency} ms` : '检测中',
+                  activeProbeLabel(activeProviderInfo),
                 ),
               ),
               h(
                 'div',
                 { style: { fontSize: '11px', color: T.secondary, wordBreak: 'break-all' } },
-                `网关端点: ${activeProviderInfo?.baseURL || '系统内置直连通道'}`,
+                // 当前渠道未配置时明确说明原因，而不是留一个「网关：未知」的空洞。
+                providerState(activeProviderInfo) === 'unconfigured'
+                  ? '网关：未配置（该渠道尚未接入，无可用网络地址）'
+                  : `网关：${activeProviderInfo?.baseURL || '未知'}`,
               ),
             ),
             h(
@@ -656,9 +709,7 @@ window.__ModuleLoader__.load({
                   'div',
                   { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
                   otherProviders.map((p, idx) => {
-                    const lat = p.probe?.latencyMs ?? -1
-                    const qual = p.probe?.quality || 'offline'
-                    const col = getQualityColor(qual, lat)
+                    const col = stateColor(p)
 
                     return h(
                       'div',
@@ -686,7 +737,7 @@ window.__ModuleLoader__.load({
                         h(
                           'div',
                           { style: { fontSize: '10px', color: T.secondary, marginTop: '2px' } },
-                          p.baseURL || '官方内置通道',
+                          providerGatewayLine(p),
                         ),
                       ),
                       h(
@@ -695,18 +746,74 @@ window.__ModuleLoader__.load({
                         h(
                           'div',
                           { style: { fontWeight: 700, fontSize: '13px', color: col } },
-                          lat > 0 ? `${lat} ms` : '超时/离线',
+                          probeLabel(p),
                         ),
                         h(
                           'div',
                           { style: { fontSize: '9px', color: T.secondary } },
-                          lat > 0 ? (lat < 200 ? '极佳' : '良好') : '不可达',
+                          qualityCaption(p),
                         ),
                       ),
                     )
                   }),
                 )
               })(),
+              // 未配置渠道默认从主列表收起：它们是「没接入」，不是「链路坏了」，
+              // 放在测速列表里会污染对比。用次级折叠区保留可发现性，并明确标注。
+              unconfiguredProviders.length > 0 &&
+                h(
+                  'details',
+                  {
+                    style: {
+                      marginTop: '10px',
+                      borderTop: `1px dashed ${T.border}`,
+                      paddingTop: '8px',
+                    },
+                  },
+                  h(
+                    'summary',
+                    {
+                      style: {
+                        fontSize: '11px',
+                        color: T.secondary,
+                        cursor: 'pointer',
+                        listStyle: 'revert',
+                      },
+                    },
+                    `未配置的渠道（${unconfiguredProviders.length}）`,
+                  ),
+                  h(
+                    'div',
+                    {
+                      style: {
+                        marginTop: '8px',
+                        fontSize: '11px',
+                        color: T.secondary,
+                        lineHeight: '17px',
+                      },
+                    },
+                    unconfiguredProviders.map((p, idx) =>
+                      h(
+                        'div',
+                        {
+                          key: idx,
+                          style: {
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '8px',
+                            padding: '4px 2px',
+                          },
+                        },
+                        h('span', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                          h('span', { style: dotStyle(stateColor(p)) }),
+                          p.name,
+                        ),
+                        h('span', null, '未配置'),
+                      ),
+                    ),
+                  ),
+                ),
             ),
           ),
         ),
@@ -745,6 +852,17 @@ window.__ModuleLoader__.load({
 
     exports.apply = apply
     exports.inject = ['slots', 'sessions', 'modelDirectories', 'uiSession']
+    // 展示层纯函数导出：供测试直接验证「未配置 / 不可达 / 正常」三态判定，
+    // 不需要在测试里渲染 React 树。
+    exports.__display = {
+      providerState,
+      stateColor,
+      probeLabel,
+      activeProbeLabel,
+      providerGatewayLine,
+      qualityCaption,
+      splitOtherProviders,
+    }
     return module.exports
   },
 })
