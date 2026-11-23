@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.16] - 2026-11-23
+
+### Fixed
+- **修复折叠 rail 下悬停卡片被侧栏裁切**：侧栏折叠后布局列 `.sidebarCol` 带 `overflow: hidden`，卡片原先用 `left: 0; right: 0` 的绝对定位，会被 56px 的列宽挤成窄带再裁掉。现在折叠态先量触发器的 `getBoundingClientRect()`，改用 `position: fixed` 把 236px 宽卡片放到图标上方并夹在视口内（左缘对齐触发器，右侧/底部不越界）；量不到矩形时该帧不渲染卡片，绝不显示被裁切或停在旧坐标的卡片。展开态维持原绝对定位，视觉不变；折叠/展开切换时按当前几何重新量测。
+- **悬停卡片限高并改为内部滚动**：`maxHeight: min(360px, 50vh)` + `overflowY: auto`，provider 数量或内容增高时不再向上顶出视口；模型 ID 与 provider 名单行省略并补 `title`，长 ID（如 `claude-3-5-sonnet-20241022`）不再横向溢出卡片。
+- **触发器首段供应商名改为可压缩省略**：原先 `flexShrink: 0` 会让长 provider 名把模型与延迟挤出容器；现改为 `flexShrink: 1` + `minWidth: 0` + 单行省略并补 `title`，首屏数据未到达时回退显示「供应商未获取」，不再渲染出前导分隔点。
+- **修正「其它 Provider」名称的省略写法**：`text-overflow: ellipsis` 对 flex 容器里的匿名文本无效，名称包一层块级 `span` 后才真正生效，并补 `title` 可回看全名。
+
 ## [0.1.15] - 2026-11-23
 
 ### Fixed

@@ -6,6 +6,47 @@ import vm from 'node:vm'
 import net from 'node:net'
 import { apply, name, inject, loadDynamicProviders, probeLatency } from '../src/index.js'
 
+/** 在沙箱里加载 client.js，返回其导出的展示纯函数（不渲染 React 树）。 */
+function loadDisplay() {
+  const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+  let definition = null
+  const React = {
+    createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
+    useEffect: () => {},
+    useState: (v) => [v, () => {}],
+    useRef: (v) => ({ current: v }),
+    useMemo: (fn) => fn(),
+    useCallback: (fn) => fn,
+    useSyncExternalStore: () => ({}),
+  }
+  const sandbox = {
+    window: {
+      __ModuleLoader__: {
+        load: (d) => { definition = d },
+      },
+    },
+    document: {
+      createElement: () => ({ remove() {} }),
+      head: { appendChild() {} },
+    },
+    setInterval: () => 0,
+    clearInterval: () => {},
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    fetch: async () => ({ ok: false }),
+    console,
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(source, sandbox, { filename: 'client.js' })
+  assert.ok(definition, 'client.js 必须通过 __ModuleLoader__.load 注册')
+  const plugin = definition.factory((name) => {
+    if (name === 'react') return React
+    throw new Error(`unexpected require: ${name}`)
+  })
+  assert.ok(plugin.__display, 'client 必须导出展示纯函数')
+  return plugin.__display
+}
+
 describe('dsh-link-pulse tests', () => {
   test('plugin metadata and cordis inject declaration', () => {
     assert.equal(name, 'link-pulse')
@@ -564,47 +605,6 @@ describe('dsh-link-pulse tests', () => {
       secondary: 'var(--dsw-alias-label-secondary, #71717a)',
     }
 
-    /** 在沙箱里加载 client.js，返回其导出的展示纯函数。 */
-    function loadDisplay() {
-      const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
-      let definition = null
-      const React = {
-        createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
-        useEffect: () => {},
-        useState: (v) => [v, () => {}],
-        useRef: (v) => ({ current: v }),
-        useMemo: (fn) => fn(),
-        useCallback: (fn) => fn,
-        useSyncExternalStore: () => ({}),
-      }
-      const sandbox = {
-        window: {
-          __ModuleLoader__: {
-            load: (d) => { definition = d },
-          },
-        },
-        document: {
-          createElement: () => ({ remove() {} }),
-          head: { appendChild() {} },
-        },
-        setInterval: () => 0,
-        clearInterval: () => {},
-        setTimeout: () => 0,
-        clearTimeout: () => {},
-        fetch: async () => ({ ok: false }),
-        console,
-      }
-      vm.createContext(sandbox)
-      vm.runInContext(source, sandbox, { filename: 'client.js' })
-      assert.ok(definition, 'client.js 必须通过 __ModuleLoader__.load 注册')
-      const plugin = definition.factory((name) => {
-        if (name === 'react') return React
-        throw new Error(`unexpected require: ${name}`)
-      })
-      assert.ok(plugin.__display, 'client 必须导出展示纯函数')
-      return plugin.__display
-    }
-
     const display = loadDisplay()
 
     // 三态输入：未配置（无 baseURL）/ 不可达（有 baseURL、探针失败）/ 正常（有 RTT）。
@@ -682,6 +682,67 @@ describe('dsh-link-pulse tests', () => {
       // 对照：选中一个真正不可达的渠道时，仍要如实显示故障。
       assert.equal(display.activeProbeLabel(unreachable), '不可达')
       assert.equal(display.stateColor(unreachable), T.err)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // 折叠 rail 的悬停卡片：rail 只有约 56px 宽，布局列 .sidebarCol 又是
+  // overflow: hidden，沿用 left:0/right:0 的绝对定位会被挤成窄带并裁掉。
+  // 折叠态改为 fixed + 触发器实测矩形；宽态保持原有绝对定位不变。
+  // -------------------------------------------------------------------------
+  describe('折叠 rail 的悬停卡片定位', () => {
+    const place = loadDisplay().hoverCardPlacement
+
+    test('按触发器矩形算出 fixed 坐标，卡片宽度足以阅读', () => {
+      // 典型 rail：图标在栏内、靠近窗口底部。
+      const placement = place({ left: 10, top: 720 }, 1280, 800)
+
+      assert.equal(placement.position, 'fixed', '折叠态必须脱离被 overflow 裁切的绝对定位')
+      assert.equal(placement.width, 236)
+      assert.equal(placement.left, 10)
+      // 底边落在触发器上方 6px：800 - 720 + 6。
+      assert.equal(placement.bottom, 86)
+      assert.equal('right' in placement, false, 'fixed 坐标不能带 right，否则留下矛盾约束')
+      assert.equal(placement.maxWidth, 'calc(100vw - 16px)')
+    })
+
+    test('靠近视口边缘时整块夹回视口内', () => {
+      // 右侧放不下：left 退到 1280 - 236 - 8。
+      assert.equal(place({ left: 1100, top: 700 }, 1280, 800).left, 1036)
+      // 极窄视口：不越过左边距。
+      assert.equal(place({ left: 2, top: 700 }, 200, 800).left, 8)
+      // 触发器贴近顶部：bottom 不越过视口上边距。
+      assert.equal(place({ left: 10, top: 4 }, 1280, 800).bottom, 792)
+      // 视口尺寸未知时仍给出可用的左/下界，不产生 NaN。
+      const unknown = place({ left: 10, top: 720 })
+      assert.equal(unknown.left, 10)
+      assert.equal(unknown.bottom, 8)
+    })
+
+    test('量不到触发器矩形时不返回坐标，避免渲染被裁切的卡片', () => {
+      assert.equal(place(null, 1280, 800), null)
+      assert.equal(place(undefined, 1280, 800), null)
+    })
+
+    test('client 把实测坐标接到卡片上，宽态定位与悬停行为保持不变', () => {
+      const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+
+      // 触发器挂了 ref，折叠态才有东西可量。
+      assert.match(source, /ref:\s*triggerRef/)
+      assert.match(source, /getBoundingClientRect/)
+      // 折叠态坐标写进卡片 style。
+      assert.match(source, /\.\.\.cardPlacement/)
+      // 宽态仍是原来的四条绝对定位属性（left/right 0 + calc(100% + 6px)）。
+      assert.match(
+        source,
+        /position:\s*'absolute',\s*\n\s*left:\s*0,\s*\n\s*right:\s*0,\s*\n\s*bottom:\s*'calc\(100% \+ 6px\)',/,
+      )
+      // 悬停行为不变：220ms 延时、面板打开不显示、移出立即收起。
+      assert.match(source, /setTimeout\(\(\) => setHovering\(true\), 220\)/)
+      assert.match(source, /if \(!hovering \|\| state\.open\) return node/)
+      assert.match(source, /clearTimeout\(hoverTimerRef\.current\)\s*\n\s*setHovering\(false\)/)
+      // 折叠/展开切换要重量：定位 effect 依赖 hovering 与 isFolded。
+      assert.match(source, /\}, \[hovering, isFolded\]\)/)
     })
   })
 })

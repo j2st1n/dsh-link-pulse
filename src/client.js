@@ -306,17 +306,77 @@ window.__ModuleLoader__.load({
       return selection
     }
 
+    // ---------- 折叠 rail 的悬停卡片定位 ----------
+    //
+    // 侧栏折叠成 rail 后宽度只有约 56px，且布局列 .sidebarCol 带 overflow: hidden
+    // （dsh-client-ui-layout/AppFrame.module.css）。悬停卡片若继续用 left:0/right:0 的
+    // 绝对定位，会被挤成一条窄带再被裁掉。折叠态改为 fixed + 触发器实测矩形：
+    // fixed 不受祖先 overflow 影响（侧栏祖先没有 transform / backdrop-filter / contain，
+    // 不会给 fixed 造出新的包含块），卡片按 236px 渲染并夹在视口内。
+    const HOVER_CARD_WIDTH = 236
+    const HOVER_CARD_GAP = 6
+    const HOVER_CARD_EDGE = 8
+
+    /**
+     * 由触发器矩形算出折叠态卡片的 fixed 坐标；拿不到矩形时返回 null（宁可不显示，
+     * 也不渲染一张会被裁切或停在旧位置的卡片）。
+     * rect 直接传 getBoundingClientRect() 的返回值。
+     */
+    function hoverCardPlacement(rect, viewportWidth, viewportHeight) {
+      if (!rect) return null
+      const width = HOVER_CARD_WIDTH
+      const vw = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : 0
+      const vh = Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : 0
+
+      // 左缘对齐触发器（rail 图标），右侧放不下时整块夹回视口内。
+      let left = Math.round(rect.left || 0)
+      if (vw > 0) left = Math.min(left, vw - width - HOVER_CARD_EDGE)
+      left = Math.max(HOVER_CARD_EDGE, left)
+
+      // 卡片底边落在触发器上方 gap 处（与展开态的 bottom: calc(100% + 6px) 同感）。
+      let bottom = Math.round((vh || 0) - (rect.top || 0) + HOVER_CARD_GAP)
+      if (vh > 0) bottom = Math.min(bottom, vh - HOVER_CARD_EDGE)
+      bottom = Math.max(HOVER_CARD_EDGE, bottom)
+
+      return {
+        position: 'fixed',
+        left,
+        bottom,
+        width,
+        // 极窄窗口下 width 仍会被视口夹住，不再横向溢出。
+        maxWidth: `calc(100vw - ${HOVER_CARD_EDGE * 2}px)`,
+      }
+    }
+
     function FooterEntry(props) {
       const { wide } = props
       const state = useStore()
       const [hovering, setHovering] = useState(false)
+      // 折叠态卡片坐标：只在 rail 下使用，展开态一律走 CSS 绝对定位。
+      const [hoverPos, setHoverPos] = useState(null)
       const hoverTimerRef = React.useRef(null)
+      const triggerRef = React.useRef(null)
+      const isFolded = wide === false
 
       useEffect(() => {
         fetchStatus(false)
         const timer = setInterval(() => fetchStatus(false), 45_000)
         return () => clearInterval(timer)
       }, [])
+
+      // 卸载时清掉待触发的悬停定时器，避免 220ms 后对已卸载组件 setState。
+      useEffect(() => () => clearTimeout(hoverTimerRef.current), [])
+
+      // 折叠态用 fixed + 触发器实测矩形定位；展开态不需要坐标，顺手清空，
+      // 折叠/展开切换后会按当前几何重量，不会沿用上一次（或展开态）的坐标。
+      useEffect(() => {
+        if (!hovering || !isFolded) {
+          setHoverPos(null)
+          return
+        }
+        const rect = triggerRef.current?.getBoundingClientRect?.()
+        setHoverPos(hoverCardPlacement(rect, window.innerWidth, window.innerHeight))
+      }, [hovering, isFolded])
 
       const data = state.data
       const defaultModelConfig = data?.defaultModelConfig
@@ -346,7 +406,8 @@ window.__ModuleLoader__.load({
       const otherProviders = otherProviderSplit.shown
 
       const segments = [
-        { text: providerDisplayName, color: T.label, bold: true },
+        // 首屏 data 尚未到达时供应商名可能为空，直接拼会渲染出前导分隔点，故兜底。
+        { text: providerDisplayName || '供应商未获取', color: T.label, bold: true },
         { text: modelShortName, color: T.secondary },
         { text: activeProbeLabel(activeProviderInfo), color: statusColor, bold: true },
       ]
@@ -356,6 +417,8 @@ window.__ModuleLoader__.load({
         {
           // 弹出面板靠这个类名把「点触发器」排除在外部点击关闭之外。
           className: 'pulse-btn dsh-link-pulse-trigger',
+          // 折叠态悬停卡片要靠它量触发器位置。
+          ref: triggerRef,
           onClick: () => store.set({ open: !state.open }),
           onMouseEnter: onMouseEnter,
           onMouseLeave: onMouseLeave,
@@ -387,7 +450,25 @@ window.__ModuleLoader__.load({
             },
             segments.flatMap((s, i) =>
               i === 0
-                ? [h('span', { key: `s${i}`, style: { color: s.color, fontWeight: 500, flexShrink: 0 } }, s.text)]
+                ? [
+                    h(
+                      'span',
+                      {
+                        key: `s${i}`,
+                        // provider 名不可 flexShrink:0——它撑住宽度会把后面的模型与延迟挤出容器。
+                        title: s.text,
+                        style: {
+                          color: s.color,
+                          fontWeight: 500,
+                          flexShrink: 1,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        },
+                      },
+                      s.text,
+                    ),
+                  ]
                 : [
                     h('span', { key: `sep${i}`, style: { color: T.secondary, margin: '0 5px', opacity: 0.7, flexShrink: 0 } }, '·'),
                     h(
@@ -412,6 +493,19 @@ window.__ModuleLoader__.load({
 
       if (!hovering || state.open) return node
 
+      // 宽态维持既有视觉：卡片仍绝对定位在触发器上方（left/right 0、bottom calc(100% + 6px)）；
+      // 折叠态换成实测的 fixed 坐标；量不到就这一帧先不画卡片，绝不画被裁切或停在旧坐标的卡片。
+      const cardPlacement = isFolded
+        ? hoverPos
+        : {
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 'calc(100% + 6px)',
+          }
+
+      if (!cardPlacement) return node
+
       return h(
         'div',
         {
@@ -425,10 +519,7 @@ window.__ModuleLoader__.load({
           {
             className: 'pulse-panel-enter',
             style: {
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 'calc(100% + 6px)',
+              ...cardPlacement,
               background: T.bg,
               border: `1px solid ${T.border2}`,
               borderRadius: '10px',
@@ -438,12 +529,36 @@ window.__ModuleLoader__.load({
               lineHeight: '17px',
               color: T.label,
               whiteSpace: 'pre',
+              // provider 数量或内容高度增加时卡片向上撑高，限高后改为内部滚动，避免顶出视口。
+              maxHeight: 'min(360px, 50vh)',
+              overflowY: 'auto',
+              overflowX: 'hidden',
               zIndex: 100,
               fontFamily: 'system-ui, -apple-system, sans-serif',
             },
           },
-          h('div', { style: { fontWeight: 600, fontSize: '12px', marginBottom: 4 } }, activeSelection.model),
-          h('div', { style: { color: T.secondary } }, providerDisplayName),
+          // 模型 ID 可能很长（如 claude-3-5-sonnet-20241022）；容器是 whiteSpace:'pre'，
+          // 不显式截断会横向溢出卡片，故单独一行做省略。
+          h(
+            'div',
+            {
+              title: activeSelection.model,
+              style: {
+                fontWeight: 600,
+                fontSize: '12px',
+                marginBottom: 4,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              },
+            },
+            activeSelection.model || '模型未获取',
+          ),
+          h(
+            'div',
+            { style: { color: T.secondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: providerDisplayName },
+            providerDisplayName || '供应商未获取',
+          ),
           h(
             'div',
             {
@@ -481,7 +596,9 @@ window.__ModuleLoader__.load({
               },
               h(
                 'span',
-                { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+                // provider 名可能很长；容器是 whiteSpace:'pre'，不截断会横向溢出卡片。
+                // 注意：text-overflow 对 flex 容器里的匿名文本子项无效，必须包一层块级 span。
+                { style: { display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 } },
                 h('span', {
                   style: {
                     ...dotStyle(stateColor(p)),
@@ -489,12 +606,21 @@ window.__ModuleLoader__.load({
                     height: 5,
                   },
                 }),
-                p.name,
+                h(
+                  'span',
+                  {
+                    title: p.name,
+                    style: { minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+                  },
+                  p.name,
+                ),
               ),
               h(
                 'span',
                 {
                   style: {
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
                     color: stateColor(p),
                     fontWeight: 600,
                   },
@@ -975,6 +1101,7 @@ window.__ModuleLoader__.load({
       providerGatewayLine,
       qualityCaption,
       splitOtherProviders,
+      hoverCardPlacement,
     }
     return module.exports
   },
