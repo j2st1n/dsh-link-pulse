@@ -168,14 +168,17 @@ window.__ModuleLoader__.load({
       return provider?.baseURL || ''
     }
 
-    /** 质量副标题：未配置不再落进「不可达」。 */
+    /** 质量副标题：未配置不再落进「不可达」；档位与颜色阈值保持一致。 */
     function qualityCaption(provider) {
       const state = providerState(provider)
       if (state === 'unconfigured') return '未配置'
       if (state === 'pending') return '探测中'
+      if (provider?.probe?.quality === 'timeout') return '超时'
       const lat = provider?.probe?.latencyMs ?? -1
       if (lat <= 0) return '不可达'
-      return lat < 200 ? '极佳' : '良好'
+      if (lat <= 200) return '极佳'
+      if (lat <= 600) return '良好'
+      return '较慢'
     }
 
     function probeLabel(provider) {
@@ -689,20 +692,63 @@ window.__ModuleLoader__.load({
                 {
                   style: {
                     display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '8px',
+                    flexDirection: 'column',
+                    minWidth: 0,
                   },
                 },
                 h(
                   'div',
-                  { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                  { style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 } },
                   h('span', { style: dotStyle(statusColor) }),
-                  h('span', { style: { fontWeight: 600, fontSize: '14px' } }, activeSelection.model),
+                  // 模型 ID 可能很长（如 deepseek-v4.1-flash），单行截断而不是换行把行高撑开。
+                  h(
+                    'span',
+                    {
+                      title: activeSelection.model,
+                      style: {
+                        fontWeight: 600,
+                        fontSize: '14px',
+                        flex: '1 1 auto',
+                        minWidth: 0,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      },
+                    },
+                    activeSelection.model,
+                  ),
                   h(
                     'span',
                     {
                       style: {
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap',
+                        fontSize: '16px',
+                        fontWeight: 700,
+                        color: statusColor,
+                      },
+                    },
+                    activeProbeLabel(activeProviderInfo),
+                  ),
+                ),
+                h(
+                  'div',
+                  {
+                    style: {
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      marginTop: '6px',
+                      minWidth: 0,
+                    },
+                  },
+                  // 供应商徽章移到第二行，避免与模型名、延迟数字争抢同一行的宽度。
+                  h(
+                    'span',
+                    {
+                      style: {
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap',
                         fontSize: '10px',
                         padding: '2px 6px',
                         borderRadius: '4px',
@@ -711,28 +757,28 @@ window.__ModuleLoader__.load({
                         fontWeight: 600,
                       },
                     },
-                    `供应商: ${providerDisplayName}`,
+                    providerDisplayName,
+                  ),
+                  h(
+                    'span',
+                    {
+                      title: activeProviderInfo?.baseURL || '',
+                      style: {
+                        flex: '1 1 auto',
+                        minWidth: 0,
+                        fontSize: '11px',
+                        color: T.secondary,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      },
+                    },
+                    // 当前渠道未配置时明确说明原因，而不是留一个「网关：未知」的空洞。
+                    providerState(activeProviderInfo) === 'unconfigured'
+                      ? '网关：未配置（该渠道尚未接入）'
+                      : `网关：${activeProviderInfo?.baseURL || '未知'}`,
                   ),
                 ),
-                h(
-                  'span',
-                  {
-                    style: {
-                      fontSize: '16px',
-                      fontWeight: 700,
-                      color: statusColor,
-                    },
-                  },
-                  activeProbeLabel(activeProviderInfo),
-                ),
-              ),
-              h(
-                'div',
-                { style: { fontSize: '11px', color: T.secondary, wordBreak: 'break-all' } },
-                // 当前渠道未配置时明确说明原因，而不是留一个「网关：未知」的空洞。
-                providerState(activeProviderInfo) === 'unconfigured'
-                  ? '网关：未配置（该渠道尚未接入，无可用网络地址）'
-                  : `网关：${activeProviderInfo?.baseURL || '未知'}`,
               ),
             ),
             h(
