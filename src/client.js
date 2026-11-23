@@ -64,6 +64,38 @@ window.__ModuleLoader__.load({
       whiteSpace: 'nowrap',
     }
 
+    // 装饰图标统一走内联 SVG，与 dsh-weather 的控件图标写法一致（14×14、stroke:currentColor）。
+    const iconSvg = (children) =>
+      h(
+        'svg',
+        {
+          width: 14,
+          height: 14,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 2,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+        children,
+      )
+
+    const Icons = {
+      activity: () =>
+        iconSvg([h('path', { d: 'M22 12h-4l-3 9L9 3l-3 9H2' })]),
+      refresh: () =>
+        iconSvg([
+          h('path', { d: 'M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8' }),
+          h('path', { d: 'M3 3v5h5' }),
+          h('path', { d: 'M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16' }),
+          h('path', { d: 'M16 21h5v-5' }),
+        ]),
+      close: () =>
+        iconSvg([h('path', { d: 'M18 6 6 18' }), h('path', { d: 'm6 6 12 12' })]),
+    }
+
     // ---------- 全局单例共享状态（网络延迟数据） ----------
     const store = {
       state: {
@@ -319,7 +351,8 @@ window.__ModuleLoader__.load({
       const node = h(
         'button',
         {
-          className: 'pulse-btn',
+          // 弹出面板靠这个类名把「点触发器」排除在外部点击关闭之外。
+          className: 'pulse-btn dsh-link-pulse-trigger',
           onClick: () => store.set({ open: !state.open }),
           onMouseEnter: onMouseEnter,
           onMouseLeave: onMouseLeave,
@@ -406,8 +439,8 @@ window.__ModuleLoader__.load({
               fontFamily: 'system-ui, -apple-system, sans-serif',
             },
           },
-          h('div', { style: { fontWeight: 600, fontSize: '12px', marginBottom: 4 } }, `🎯 ${activeSelection.model}`),
-          h('div', { style: { color: T.secondary } }, `🏢 ${providerDisplayName}`),
+          h('div', { style: { fontWeight: 600, fontSize: '12px', marginBottom: 4 } }, activeSelection.model),
+          h('div', { style: { color: T.secondary } }, providerDisplayName),
           h(
             'div',
             {
@@ -418,7 +451,7 @@ window.__ModuleLoader__.load({
                 marginBottom: otherProviders.length > 0 ? 6 : 0,
               },
             },
-            `⚡ ${activeProbeLabel(activeProviderInfo)}`,
+            activeProbeLabel(activeProviderInfo),
           ),
           otherProviders.length > 0 &&
             h(
@@ -430,7 +463,7 @@ window.__ModuleLoader__.load({
                   color: T.secondary,
                 },
               },
-              '🌐 其它 Provider 链路',
+              '其它 Provider 链路',
             ),
           otherProviders.map((p, i) =>
             h(
@@ -482,6 +515,22 @@ window.__ModuleLoader__.load({
 
       const providerId = activeSelection.provider || defaultModelConfig?.provider || ''
       const activeProviderInfo = useMemo(() => activeProvider(data, providerId), [data, providerId])
+      const panelRef = React.useRef(null)
+
+      // 面板不再有全屏遮罩，必须用 window mousedown 补回「点外部关闭」，
+      // 做法与 dsh-version-status / dsh-weather / dsh-cpa-status 一致。
+      // 触发器本身要排除：否则 mousedown 先关闭、click 又打开，按钮就永远关不掉面板。
+      useEffect(() => {
+        if (!isOpen) return
+        function handleOutside(e) {
+          if (panelRef.current && panelRef.current.contains(e.target)) return
+          const trigger = document.querySelector('.dsh-link-pulse-trigger')
+          if (trigger && trigger.contains(e.target)) return
+          store.set({ open: false })
+        }
+        window.addEventListener('mousedown', handleOutside)
+        return () => window.removeEventListener('mousedown', handleOutside)
+      }, [isOpen])
 
       if (!isOpen) return null
 
@@ -493,39 +542,36 @@ window.__ModuleLoader__.load({
       const unconfiguredProviders = otherProviderSplit.unconfigured
       const providerDisplayName = activeProviderInfo?.name || activeSelection.provider.toUpperCase()
 
+      // 与 dsh-weather / dsh-version-status / dsh-cpa-status 一致：贴侧栏底部的浮动面板，
+      // 不再是居中模态 + 全屏遮罩。
       return h(
         'div',
         {
+          ref: panelRef,
+          className: 'pulse-panel-enter',
           style: {
             position: 'fixed',
-            inset: 0,
-            zIndex: 9999,
+            left: 12,
+            bottom: 54,
+            width: 380,
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: 'calc(100vh - 80px)',
+            background: T.bg,
+            border: `1px solid ${T.border}`,
+            borderRadius: 14,
+            boxShadow: '0 12px 36px rgba(0,0,0,0.45)',
+            color: T.label,
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0,0,0,.45)',
-            backdropFilter: 'blur(4px)',
-          },
-          onClick: (e) => {
-            if (e.target === e.currentTarget) store.set({ open: false })
+            flexDirection: 'column',
+            overflow: 'hidden',
+            // shell.overlay 层本身 click-through，浮动面板需要自行接管点击。
+            pointerEvents: 'auto',
+            zIndex: 70,
+            fontFamily: 'system-ui, -apple-system, sans-serif',
+            fontSize: 12,
+            lineHeight: 1.4,
           },
         },
-        h(
-          'div',
-          {
-            className: 'pulse-panel-enter',
-            style: {
-              width: '92%',
-              maxWidth: '540px',
-              background: T.bg,
-              border: `1px solid ${T.border2}`,
-              borderRadius: '16px',
-              boxShadow: '0 20px 40px rgba(0,0,0,.25)',
-              color: T.label,
-              overflow: 'hidden',
-              fontFamily: 'system-ui, -apple-system, sans-serif',
-            },
-          },
           h(
             'div',
             {
@@ -533,66 +579,86 @@ window.__ModuleLoader__.load({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '16px 20px',
+                gap: '8px',
+                padding: '12px 14px',
                 borderBottom: `1px solid ${T.border}`,
+                flexShrink: 0,
               },
             },
             h(
               'div',
-              { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-              h('span', { style: { fontSize: '20px' } }, '📡'),
+              { style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 } },
+              h('span', { style: { display: 'inline-flex', color: T.brand } }, h(Icons.activity)),
               h(
                 'div',
-                null,
-                h('div', { style: { fontSize: '15px', fontWeight: 600 } }, '模型链路与上游延迟脉搏'),
+                { style: { minWidth: 0 } },
+                h('div', { style: { fontSize: '13px', fontWeight: 600 } }, '模型链路与上游延迟脉搏'),
                 h(
                   'div',
-                  { style: { fontSize: '11px', color: T.secondary } },
+                  {
+                    style: {
+                      fontSize: '11px',
+                      color: T.secondary,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    },
+                  },
                   '实时订阅当前对话供应商与模型状态',
                 ),
               ),
             ),
             h(
               'div',
-              { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+              { style: { display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 } },
               h(
                 'button',
                 {
                   className: 'pulse-btn',
                   onClick: () => fetchStatus(true),
                   disabled: loading,
+                  title: '立即测速',
                   style: {
                     display: 'flex',
                     alignItems: 'center',
                     gap: '4px',
-                    padding: '5px 12px',
+                    padding: '4px 10px',
                     borderRadius: '6px',
                     border: `1px solid ${T.border}`,
                     background: 'transparent',
                     color: T.label,
                     fontSize: '12px',
                     fontWeight: 500,
-                    cursor: 'pointer',
+                    cursor: loading ? 'default' : 'pointer',
                   },
                 },
-                loading ? h('span', { className: 'pulse-spin' }, '⚡') : '⚡ 立即测速',
+                h(
+                  'span',
+                  { className: loading ? 'pulse-spin' : undefined, style: { display: 'inline-flex' } },
+                  h(Icons.refresh),
+                ),
+                loading ? '测速中' : '立即测速',
               ),
               h(
                 'button',
                 {
                   className: 'pulse-btn',
                   onClick: () => store.set({ open: false }),
+                  title: '关闭',
+                  'aria-label': '关闭',
                   style: {
-                    padding: '4px 8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '4px 7px',
                     borderRadius: '6px',
                     border: `1px solid ${T.border}`,
                     background: 'transparent',
                     color: T.secondary,
-                    fontSize: '14px',
                     cursor: 'pointer',
                   },
                 },
-                '✕',
+                Icons.close(),
               ),
             ),
           ),
@@ -600,10 +666,12 @@ window.__ModuleLoader__.load({
             'div',
             {
               style: {
-                padding: '20px',
+                padding: '14px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '14px',
+                gap: '12px',
+                minHeight: 0,
+                overflowY: 'auto',
               },
             },
             h(
@@ -612,8 +680,8 @@ window.__ModuleLoader__.load({
                 style: {
                   background: T.layer1,
                   border: `1px solid ${T.border}`,
-                  borderRadius: '12px',
-                  padding: '14px 16px',
+                  borderRadius: '10px',
+                  padding: '12px 14px',
                 },
               },
               h(
@@ -673,8 +741,8 @@ window.__ModuleLoader__.load({
                 style: {
                   background: T.layer1,
                   border: `1px solid ${T.border}`,
-                  borderRadius: '12px',
-                  padding: '14px 16px',
+                  borderRadius: '10px',
+                  padding: '12px 14px',
                 },
               },
               h(
@@ -687,7 +755,7 @@ window.__ModuleLoader__.load({
                     marginBottom: '10px',
                   },
                 },
-                '🌐 其它可用 Provider 链路测速',
+                '其它可用 Provider 链路测速',
               ),
               (() => {
                 if (otherProviders.length === 0) {
@@ -816,7 +884,6 @@ window.__ModuleLoader__.load({
                 ),
             ),
           ),
-        ),
       )
     }
 

@@ -13,6 +13,20 @@ describe('dsh-link-pulse tests', () => {
     assert.deepEqual(inject, ['webServer'])
   })
 
+  test('client 弹出面板与参考插件同形，且不再使用 emoji 装饰', () => {
+    const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
+    // 居中模态 + 全屏遮罩已移除，面板改为与 dsh-weather / dsh-version-status / dsh-cpa-status
+    // 一致的左下浮动面板。
+    assert.doesNotMatch(source, /inset:\s*0/)
+    assert.doesNotMatch(source, /backdropFilter/)
+    assert.match(source, /left:\s*12,\s*\n\s*bottom:\s*54,/)
+    // 移除遮罩后必须由 window mousedown 接管「点外部关闭」，并在卸载时移除监听。
+    assert.match(source, /window\.addEventListener\('mousedown'/)
+    assert.match(source, /window\.removeEventListener\('mousedown'/)
+    // 装饰性 emoji（含 ✕ 字符）已全部替换为文本标签或内联 SVG 图标。
+    assert.doesNotMatch(source, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u)
+  })
+
   test('loadDynamicProviders loads providers and providerMap correctly', () => {
     const { providers, providerMap, defaultModelConfig } = loadDynamicProviders()
     assert.ok(Array.isArray(providers))

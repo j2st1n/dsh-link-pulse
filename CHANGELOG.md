@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.14] - 2026-11-23
+
+### Changed
+- **弹出面板改为左下浮动面板**：点击侧栏条目的面板原先为居中模态框 + 全屏暗遮罩（`inset: 0`、`rgba(0,0,0,.45)`、`backdrop-filter: blur(4px)`），与其它插件不一致；现改为与 `dsh-weather` / `dsh-version-status` / `dsh-cpa-status` 相同的左下浮动面板定位（`position: fixed; left: 12; bottom: 54; width: 380; max-width: calc(100vw - 24px)`，14px 圆角、`0 12px 36px rgba(0,0,0,0.45)` 阴影、`z-index: 70`），并补 `pointer-events: auto` 以在 click-through 的 `shell.overlay` 层上接管点击。
+- **移除装饰性 emoji**：悬停预览的模型名、Provider 名、延迟与分区标题，以及面板标题、测速按钮、关闭按钮中的 `🎯` `🏢` `⚡` `🌐` `📡` 与 `✕` 字符全部移除，改用纯文本标签和 14×14 内联 SVG 图标（`stroke: currentColor`、`stroke-width: 2`、圆头端点，图标写法对齐 `dsh-weather` 的控件图标集）；关闭按钮改为 SVG X 图标并补 `aria-label="关闭"`。
+- **版本号同步**：`package-lock.json` 的 `version` 与 `packages[""].version` 同步到 `0.1.14`（只改版本字段，未重算依赖树）。
+
+### Fixed
+- **补入点击面板外部关闭**：原先关闭面板依赖点击全屏遮罩，遮罩移除后会失去关闭路径；现改为与参考插件一致的 `window mousedown` 监听——点击面板内部与侧栏触发器不误关，组件卸载时移除监听。
+
+### Dependencies
+- `js-yaml` 依赖下限由 `^4.1.0` 提升至 `^4.3.2`，`package-lock.json` 同步锁定 `js-yaml@4.3.2`，修复 GHSA-2883-xcg3-v3hh（high，影响 `>=4.0.0 <4.3.2`）。
+
 ## [0.1.13] - 2026-11-22
 
 ### Fixed
